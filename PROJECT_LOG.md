@@ -12,8 +12,7 @@
 - Original CampusShield project direction retained.
 - External AI-agent support planned.
 - Real network telemetry planned.
-- SOCrates, DepGuardX, PulseGuardX and crypto-security
-  workstreams retained.
+
 
 ### Ownership
 - Member A: SOCrates port/core, agent integration,
