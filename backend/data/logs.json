@@ -1,0 +1,6 @@
+{
+ "campus-lab-service":[{"event":"process spawned","detail":"A shell process was spawned from a web worker."},{"event":"mitigation","detail":"EDR terminated the process before outbound connections were established."}],
+ "campus-lab-login":[{"event":"authentication failures","detail":"Fourteen failed logins in a short interval."},{"event":"successful login","detail":"No privileged session or suspicious process observed."}],
+ "campus-database-01":[{"event":"routine connection","detail":"No suspicious execution or data transfer observed."}],
+ "campus-decommissioned-01":[{"event":"reported activity","detail":"Logs claim access to a retired host; this conflicts with inventory status."}]
+}

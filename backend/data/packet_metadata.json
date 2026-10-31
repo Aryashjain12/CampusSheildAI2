@@ -1,0 +1,6 @@
+{
+ "campus-lab-service":[{"bytes_transferred":300,"destination_port":443}],
+ "campus-lab-login":[{"bytes_transferred":450,"destination_port":22}],
+ "campus-database-01":[],
+ "campus-decommissioned-01":[]
+}

@@ -1,0 +1,6 @@
+[
+ {"host_id":"campus-lab-service","software":"nginx","version":"1.24.0","status":"active"},
+ {"host_id":"campus-lab-login","software":"OpenSSH","version":"8.2","status":"active"},
+ {"host_id":"campus-database-01","software":"PostgreSQL","version":"14.2","status":"active"},
+ {"host_id":"campus-decommissioned-01","software":"Apache","version":"2.4.49","status":"decommissioned","decommissioned_date":"2026-08-01"}
+]

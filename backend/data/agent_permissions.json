@@ -1,0 +1,68 @@
+{
+  "agents": {
+    "helpdesk": {
+      "allowed": [
+        "read_tickets",
+        "reply_ticket",
+        "post_shared_memory",
+        "read_shared_memory"
+      ],
+      "not_allowed": [
+        "get_fee_record",
+        "lookup_student",
+        "lookup_own_student",
+        "bulk_lookup",
+        "export_records",
+        "export_all_records",
+        "fake_export_tool"
+      ],
+      "description": "Helpdesk helper: can read tickets and post/read shared memory, forbidden from fee or student records."
+    },
+    "library": {
+      "allowed": [
+        "catalogue_search"
+      ],
+      "not_allowed": [
+        "get_fee_record",
+        "lookup_student",
+        "lookup_own_student",
+        "bulk_lookup",
+        "export_records",
+        "export_all_records",
+        "post_shared_memory",
+        "fake_export_tool"
+      ],
+      "description": "Library helper: catalogue search only, forbidden from any student data."
+    },
+    "finance": {
+      "allowed": [
+        "get_fee_record",
+        "read_shared_memory",
+        "post_shared_memory"
+      ],
+      "not_allowed": [
+        "export_all_records",
+        "export_records",
+        "bulk_lookup",
+        "catalogue_search",
+        "fake_export_tool"
+      ],
+      "description": "Finance helper: read fee records, forbidden from bulk export of all records."
+    },
+    "student_support": {
+      "allowed": [
+        "lookup_own_student",
+        "read_shared_memory",
+        "post_shared_memory"
+      ],
+      "not_allowed": [
+        "bulk_lookup",
+        "get_fee_record",
+        "export_all_records",
+        "export_records",
+        "fake_export_tool"
+      ],
+      "description": "Student support helper: single student lookup for assigned case, forbidden from bulk lookups and fee records."
+    }
+  }
+}

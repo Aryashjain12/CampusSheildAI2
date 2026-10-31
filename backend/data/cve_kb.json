@@ -1,0 +1,4 @@
+[
+ {"software":"Apache","affected_versions":["2.4.49"],"cve_id":"CVE-2021-41773","description":"Path traversal vulnerability in affected Apache HTTP Server versions."},
+ {"software":"OpenSSH","affected_versions":["8.2"],"cve_id":"DEMO-CVE-SSH-001","description":"Synthetic training-only vulnerable-version marker."}
+]

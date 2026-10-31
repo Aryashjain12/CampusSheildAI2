@@ -1,0 +1,6 @@
+[
+ {"host_id":"campus-lab-service","public_facing":false,"waf_enabled":true},
+ {"host_id":"campus-lab-login","public_facing":true,"waf_enabled":true},
+ {"host_id":"campus-database-01","public_facing":false,"waf_enabled":false},
+ {"host_id":"campus-decommissioned-01","public_facing":false,"waf_enabled":false}
+]
