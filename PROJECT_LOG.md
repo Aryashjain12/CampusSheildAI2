@@ -35,8 +35,8 @@ Each feature must record:
 
 ### Initial implementation status
 - Repository cloned: verified.
-- Project charter: pending local creation.
-- Development log: pending local creation.
+- Project charter: created and committed locally.
+- Development log: created and committed locally.
 - SOCrates port: not started.
 - Agent integration: not started.
 - Live network monitoring: not started.
