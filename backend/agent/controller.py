@@ -1,5 +1,7 @@
 """Evidence-led incident investigation adapted from SOCrates for a synthetic campus sandbox."""
 from datetime import datetime
+from queue import Empty, Queue
+from threading import Thread
 from tools.asset_lookup import get_asset
 from tools.cve_lookup import check_vulnerability
 from tools.log_lookup import get_logs
@@ -15,6 +17,7 @@ from agent.verification import check_consistency, all_passed
 
 _attacker_ledger = {}
 SUSPICIOUS = {"confirmed_breach", "attempted_and_contained", "suspicious_repeat_actor"}
+LLM_ADVISORY_TIMEOUT_SECONDS = 1
 
 def reset_session_memory():
     _attacker_ledger.clear()
@@ -46,11 +49,60 @@ def _block(case, source, note):
     result=block(source); case.record_action(result); case.add_step("ACTION",note)
     case.add_evidence("firewall_check",is_blocked(source)); case.add_step("VERIFICATION",f"Simulated block verified: {case.evidence['firewall_check']}.")
 
+def _record_llm_advisory(case, host, asset, vuln, logs, packet_metadata=None):
+    """Record optional analysis without allowing it to influence security decisions.
+
+    The advisory call runs in a daemon thread so an unavailable or stalled LLM
+    cannot block the deterministic investigation path. Legacy/malformed payloads
+    (including a legacy ``outcome`` key) are intentionally ignored unless they
+    provide the supported advisory fields.
+    """
+    result_queue = Queue(maxsize=1)
+
+    def get_advisory():
+        try:
+            result_queue.put((True, classify_with_llm(host, asset, vuln, logs, packet_metadata)))
+        except Exception as exc:
+            result_queue.put((False, exc))
+
+    Thread(target=get_advisory, daemon=True).start()
+    try:
+        completed, result = result_queue.get(timeout=LLM_ADVISORY_TIMEOUT_SECONDS)
+    except Empty:
+        case.add_step("REASONING (AI)", "Optional advisory timed out; deterministic analysis continued.")
+        return
+    if not completed or not isinstance(result, dict):
+        case.add_step("REASONING (AI)", "Optional advisory unavailable; deterministic analysis continued.")
+        return
+
+    explanation = result.get("explanation")
+    observations = result.get("risk_observations")
+    recommendations = result.get("recommendations")
+    if not isinstance(explanation, str) or not explanation.strip():
+        case.add_step("REASONING (AI)", "Optional advisory returned malformed output; deterministic analysis continued.")
+        return
+    advisory = {"explanation": explanation.strip()}
+    if isinstance(observations, list):
+        advisory["risk_observations"] = observations
+    if isinstance(recommendations, list):
+        advisory["recommendations"] = recommendations
+    case.add_evidence("ai_advisory", advisory)
+    case.add_step("REASONING (AI)", explanation)
+
 def investigate(alert):
     case=Investigation(alert); host=alert.get("dest_host") or alert.get("destination_id"); src=alert.get("source_ip") or alert.get("source_id")
     alert_id=alert.get("alert_id") or ("CAMPUS-"+str(alert.get("event_id","synthetic")))
     alert={**alert,"alert_id":alert_id,"dest_host":host,"source_ip":src,"severity":alert.get("severity","High"),"signature":alert.get("signature",alert.get("event_type","Suspicious network event"))}
     case.alert=alert; severity=str(alert.get("severity","")).lower()
+    central_evidence = alert.get("central_evidence", [])
+    if central_evidence:
+        # These records originated outside SOCrates. Keep their provenance distinct
+        # from this controller's synthetic fixture/tool output.
+        case.add_evidence("central_event_evidence", {
+            "provenance": "event_scoped_reference",
+            "records": central_evidence,
+        })
+        case.add_step("EVIDENCE", f"Received {len(central_evidence)} event-scoped evidence record(s) from the central engine.")
     case.add_step("GOAL",f"Investigate {alert_id}: {alert['signature']} on {host}; claimed severity={severity}.")
     asset=get_asset(host); case.add_evidence("asset",asset)
     if asset is None:
@@ -77,22 +129,21 @@ def investigate(alert):
         case.set_verdict("false_positive","medium","No local vulnerability match and alert severity does not warrant deeper sandbox investigation; this is a heuristic, not proof the host is safe.")
         case.add_step("FINAL OUTCOME","Low-stakes alert not escalated for deeper analysis.")
         return _finalize(case)
-    logs=get_logs(host); case.add_evidence("logs",logs); case.add_step("EVIDENCE",f"Retrieved {len(logs)} synthetic server-log entries.")
+    logs=get_logs(host); case.add_evidence("logs",logs); case.add_evidence("fixture_provenance", {"logs": "synthetic_fixture"}); case.add_step("EVIDENCE",f"Retrieved {len(logs)} synthetic server-log entries.")
     config=get_configuration(host); case.add_evidence("configuration",config)
     if config: case.add_step("EVIDENCE",f"Configuration: public-facing={config.get('public_facing')}, WAF enabled={config.get('waf_enabled')}.")
     response=get_response_evidence(host); case.add_evidence("response_evidence",response)
     if response: case.add_step("EVIDENCE",f"Found {len(response)} synthetic prior response record(s).")
-    ai=classify_with_llm(host,asset,vuln,logs)
-    if ai:
-        outcome=ai["outcome"]; explanation=ai["explanation"]; case.add_evidence("ai_reasoning",explanation); case.add_step("REASONING (AI)",explanation)
-    else:
-        outcome=_classify_logs(logs); explanation="Deterministic chronological log analysis; optional AI unavailable or not configured."; case.add_step("REASONING (rule-based)",f"Initial outcome: {outcome}.")
+    outcome=_classify_logs(logs)
+    explanation="Deterministic chronological log analysis."
+    case.add_step("REASONING (rule-based)",f"Initial deterministic outcome: {outcome}.")
+    metadata = None
     if outcome=="no_evidence":
         metadata=get_packet_metadata(host); case.add_evidence("packet_metadata",metadata); case.add_step("DECISION","Logs inconclusive; requested a separate packet-metadata evidence source.")
-        ai2=classify_with_llm(host,asset,vuln,logs,metadata)
-        if ai2: outcome=ai2["outcome"]; explanation=ai2["explanation"]
-        else: outcome=_classify_packets(metadata)
-        case.add_step("REASONING",f"After packet metadata, outcome={outcome}.")
+        case.add_evidence("fixture_provenance", {"logs": "synthetic_fixture", "packet_metadata": "synthetic_fixture"})
+        outcome=_classify_packets(metadata)
+        case.add_step("REASONING",f"After deterministic packet metadata analysis, outcome={outcome}.")
+    _record_llm_advisory(case, host, asset, vuln, logs, metadata)
     context=f"{host} runs {asset['software']} {asset['version']}; vulnerability match={vuln['cve_id'] if vuln else 'none'}."
     if outcome=="succeeded":
         case.set_verdict("confirmed_breach","high",context+" Evidence suggests malicious activity succeeded. "+explanation)

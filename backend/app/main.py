@@ -5,25 +5,101 @@ ROOT_PATH = Path(__file__).resolve().parents[2]
 if str(ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(ROOT_PATH))
 
-from fastapi import FastAPI, HTTPException
+from datetime import datetime
+from uuid import UUID
+
+from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
+from app import detection, models, policy, store
+from app.models import Incident
 
-from app.models import NetworkEvent, Incident
-from app.detection import detect
-from app.policy import respond, verify
-from app import store
-from agent.controller import investigate, reconsider
+from agent.controller import investigate as socrates_investigate
+from agent.controller import reconsider as socrates_reconsider
 
-from core.schemas import SecurityEvent
+from core.schemas import (
+    EvidenceSubmission,
+    EventCategory,
+    EvidenceProvenance,
+    SecurityEvent,
+    Severity,
+    NormalizedInvestigationResult,
+)
 from core.engine import SecurityEventEngine
+from core.verification import VerificationEngine
+from pydantic import BaseModel
 
 security_engine = SecurityEventEngine()
+verification_engine = VerificationEngine()
+security_verifications: dict[UUID, dict] = {}
 
 app = FastAPI(
     title="CampusShield AI",
     version="0.1.0",
     description="Safe MVP: deterministic detection and simulated response. No real traffic is blocked.",
 )
+
+
+# Central intelligence dashboard aliases (safe MVP; simulated).
+central_sec_engine = security_engine
+central_verification_engine = verification_engine
+central_security_verifications = security_verifications
+
+
+# Optional NVIDIA Nemotron advisory controller.
+_nemotron_enabled = False
+
+
+def enable_nemotron_advisory():
+    global _nemotron_enabled
+    _nemotron_enabled = True
+
+
+def get_nemotron_status() -> dict:
+    from tools.llm_reasoner import is_nemotron_advisory_enabled
+    return {
+        "enabled": is_nemotron_advisory_enabled(),
+        "provider": "nvidia_nemotron",
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+    }
+
+
+print("INFO: Optional NVIDIA Nemotron advisory controller loaded.")
+
+
+def get_advisory_schema() -> type[BaseModel]:
+    from tools.llm_reasoner import get_advisory_schema
+    return get_advisory_schema()
+
+
+__all__ = [
+    "app",
+    "security_engine",
+    "verification_engine",
+    "security_verifications",
+    "central_sec_engine",
+    "central_verification_engine",
+    "central_security_verifications",
+    "ingest_security_event",
+    "list_security_events",
+    "get_security_event",
+    "collect_security_event_evidence",
+    "get_security_event_evidence",
+    "list_evidence",
+    "investigate_security_event",
+    "get_security_event_investigation",
+    "verify_security_event",
+    "get_security_event_verification",
+    "list_correlations",
+    "get_system_status",
+    "get_system_modules",
+    "get_nemotron_status",
+    "get_advisory_schema",
+]
+
+
+def _resolve_incident_class():
+    return Incident
 
 
 @app.get("/", include_in_schema=False)
@@ -37,8 +113,8 @@ def health():
 
 
 @app.post("/events", response_model=Incident | dict)
-def ingest_event(event: NetworkEvent):
-    incident = detect(event)
+def ingest_event(event: models.NetworkEvent):
+    incident = detection.detect(event)
     if incident is None:
         store.audit("event_ingested_no_alert", None, f"{event.event_type} from {event.source_id}")
         return {"accepted": True, "alert": False, "message": "Event ingested; no demo rule matched."}
@@ -47,7 +123,7 @@ def ingest_event(event: NetworkEvent):
     if host not in {"campus-lab-service", "campus-lab-login", "campus-database-01", "campus-decommissioned-01"}:
         host = "campus-lab-service" if event.event_type == "port_scan" else "campus-lab-login"
     severity = incident.severity.title()
-    investigation = investigate({
+    investigation = socrates_investigate({
         "alert_id": f"CS-{incident.id[:8]}", "timestamp": event.timestamp.isoformat(),
         "signature": incident.title, "severity": severity,
         "source_ip": event.source_id, "dest_host": host,
@@ -58,21 +134,23 @@ def ingest_event(event: NetworkEvent):
     store.INCIDENTS[incident.id] = incident
     store.audit("incident_created", incident.id, incident.title)
     store.audit("investigation_completed", incident.id, f"SOCrates verdict: {investigation.verdict}")
-    return incident
+
+    Incident = _resolve_incident_class()
+    return Incident(**incident.__dict__) if hasattr(incident, '__dict__') else incident
 
 
 @app.post("/demo/port-scan", response_model=Incident)
 def demo_port_scan():
-    event = NetworkEvent(
+    event = models.NetworkEvent(
         event_type="port_scan",
         source_id="demo-host-17",
         destination_id="campus-lab-service",
         features={"unique_destination_ports": 24, "connection_attempts": 61},
     )
-    incident = detect(event)
+    incident = detection.detect(event)
     if incident is None:
         raise HTTPException(status_code=500, detail="Demo event did not trigger expected detection.")
-    investigation = investigate({"alert_id": f"CS-{incident.id[:8]}", "timestamp": incident.created_at.isoformat(),
+    investigation = socrates_investigate({"alert_id": f"CS-{incident.id[:8]}", "timestamp": incident.created_at.isoformat(),
         "signature": incident.title, "severity": incident.severity.title(), "source_ip": incident.source_id,
         "dest_host": "campus-lab-service", "description": "Synthetic port-scan demo event."})
     store.INVESTIGATIONS[incident.id] = investigation
@@ -81,21 +159,23 @@ def demo_port_scan():
     store.audit("demo_port_scan", incident.id, "Synthetic demo event generated")
     store.audit("incident_created", incident.id, incident.title)
     store.audit("investigation_completed", incident.id, f"SOCrates verdict: {investigation.verdict}")
-    return incident
+
+    Incident = _resolve_incident_class()
+    return Incident(**incident.__dict__) if hasattr(incident, '__dict__') else incident
 
 
 @app.post("/demo/brute-force", response_model=Incident)
 def demo_brute_force():
-    event = NetworkEvent(
+    event = models.NetworkEvent(
         event_type="brute_force",
         source_id="demo-auth-client-04",
         destination_id="campus-lab-login",
         features={"failed_logins": 14},
     )
-    incident = detect(event)
+    incident = detection.detect(event)
     if incident is None:
         raise HTTPException(status_code=500, detail="Demo event did not trigger expected detection.")
-    investigation = investigate({"alert_id": f"CS-{incident.id[:8]}", "timestamp": incident.created_at.isoformat(),
+    investigation = socrates_investigate({"alert_id": f"CS-{incident.id[:8]}", "timestamp": incident.created_at.isoformat(),
         "signature": incident.title, "severity": incident.severity.title(), "source_ip": incident.source_id,
         "dest_host": "campus-lab-login", "description": "Synthetic brute-force demo event."})
     store.INVESTIGATIONS[incident.id] = investigation
@@ -104,7 +184,13 @@ def demo_brute_force():
     store.audit("demo_brute_force", incident.id, "Synthetic demo event generated")
     store.audit("incident_created", incident.id, incident.title)
     store.audit("investigation_completed", incident.id, f"SOCrates verdict: {investigation.verdict}")
-    return incident
+
+    Incident = _resolve_incident_class()
+    return Incident(**incident.__dict__) if hasattr(incident, '__dict__') else incident
+
+
+def _incident_ok(incident):
+    return incident is not None
 
 
 @app.get("/incidents", response_model=list[Incident])
@@ -125,7 +211,7 @@ def respond_to_incident(incident_id: str):
     incident = store.INCIDENTS.get(incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found.")
-    result = respond(incident)
+    result = policy.respond(incident)
     return result
 
 
@@ -134,7 +220,7 @@ def verify_incident(incident_id: str):
     incident = store.INCIDENTS.get(incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found.")
-    return verify(incident)
+    return policy.verify(incident)
 
 
 @app.get("/incidents/{incident_id}/investigation")
@@ -160,7 +246,7 @@ def reconsider_incident(incident_id: str, payload: dict):
     start, end = payload.get("claimed_window_start"), payload.get("claimed_window_end")
     if start and end:
         override["claimed_window_start"], override["claimed_window_end"] = str(start), str(end)
-    reconsider(investigation, override=override)
+    socrates_reconsider(investigation, override=override)
     _sync_investigation(incident, investigation)
     store.audit("investigation_reconsidered", incident.id, f"Updated verdict: {investigation.verdict}")
     return investigation.summary()
@@ -196,7 +282,7 @@ def demo_agent_attack():
     from agent_network.attacks.run_main_story import run_main_attack_story
     import uuid
     result = run_main_attack_story()
-    
+
     # Register as Incident in dashboard store
     inc_id = f"inc_{uuid.uuid4().hex[:8]}"
     incident = Incident(
@@ -291,7 +377,8 @@ def get_permissions():
 # Unified Security Event API — CampusShield AI 2.0
 # ============================================================
 
-@app.post("/api/security-events")
+
+@app.post("/api/security-events", status_code=status.HTTP_201_CREATED)
 def ingest_security_event(event: SecurityEvent):
     try:
         security_engine.ingest(event)
@@ -300,7 +387,7 @@ def ingest_security_event(event: SecurityEvent):
         return {
             "accepted": True,
             "event": event.model_dump(mode="json"),
-            "investigation": investigation.summary(),
+            "investigation": investigation.model_dump(mode="json"),
         }
 
     except ValueError as exc:
@@ -308,8 +395,146 @@ def ingest_security_event(event: SecurityEvent):
 
 
 @app.get("/api/security-events")
-def list_security_events():
+def list_security_events(
+    category: EventCategory | None = None,
+    severity: Severity | None = None,
+    source: str | None = None,
+    event_type: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+):
+    if since and until and since > until:
+        raise HTTPException(status_code=422, detail="since must be earlier than or equal to until.")
     return [
         event.model_dump(mode="json")
-        for event in security_engine.list_events()
+        for event in security_engine.list_events(
+            category=category,
+            severity=severity,
+            source=source,
+            event_type=event_type,
+            since=since,
+            until=until,
+        )
     ]
+
+
+@app.get("/api/security-events/{event_id}")
+def get_security_event(event_id: UUID):
+    event = security_engine.get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Security event not found.")
+    return event.model_dump(mode="json")
+
+
+@app.post("/api/security-events/{event_id}/evidence", status_code=status.HTTP_201_CREATED)
+def collect_security_event_evidence(event_id: UUID, submission: EvidenceSubmission):
+    try:
+        evidence = security_engine.collect_evidence(
+            event_id,
+            submission.description,
+            submission.details,
+            source=submission.source,
+            provenance=submission.provenance,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return evidence.model_dump(mode="json")
+
+
+@app.get("/api/security-events/{event_id}/evidence")
+def get_security_event_evidence(event_id: UUID):
+    if security_engine.get_event(event_id) is None:
+        raise HTTPException(status_code=404, detail="Security event not found.")
+    return [
+        evidence.model_dump(mode="json")
+        for evidence in security_engine.evidence_engine.get_event_evidence(event_id)
+    ]
+
+
+@app.get("/api/evidence")
+def list_evidence():
+    return [evidence.model_dump(mode="json") for evidence in security_engine.evidence_engine.list_evidence()]
+
+
+@app.post("/api/security-events/{event_id}/investigate")
+def investigate_security_event(event_id: UUID):
+    try:
+        result = security_engine.investigate(event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result.model_dump(mode="json")
+
+
+@app.get("/api/security-events/{event_id}/investigation")
+def get_security_event_investigation(event_id: UUID):
+    if security_engine.get_event(event_id) is None:
+        raise HTTPException(status_code=404, detail="Security event not found.")
+    result = security_engine.get_investigation(event_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Investigation has not been run for this event.")
+    return result.model_dump(mode="json")
+
+
+@app.post("/api/security-events/{event_id}/verify")
+def verify_security_event(event_id: UUID):
+    result = security_engine.get_investigation(event_id)
+    if result is None:
+        if security_engine.get_event(event_id) is None:
+            raise HTTPException(status_code=404, detail="Security event not found.")
+        raise HTTPException(status_code=409, detail="Investigate the security event before verification.")
+    verification = verification_engine.verify(result)
+    payload = {
+        "passed": verification.passed,
+        "checks": verification.checks,
+        "failures": verification.failures,
+        "timestamp": verification.timestamp.isoformat(),
+        "investigation_reference": str(verification.investigation_reference),
+        "response_reference": verification.response_reference,
+    }
+    security_verifications[event_id] = payload
+    return payload
+
+
+@app.get("/api/security-events/{event_id}/verification")
+def get_security_event_verification(event_id: UUID):
+    if security_engine.get_event(event_id) is None:
+        raise HTTPException(status_code=404, detail="Security event not found.")
+    verification = security_verifications.get(event_id)
+    if verification is None:
+        raise HTTPException(status_code=404, detail="Verification has not been run for this event.")
+    return verification
+
+
+@app.get("/api/correlations")
+def list_correlations():
+    return [correlation.model_dump(mode="json") for correlation in security_engine.list_correlations()]
+
+
+@app.get("/api/system/status")
+def get_system_status():
+    return {
+        "status": "ok",
+        "storage": "in_memory_session_only",
+        "events": len(security_engine.events),
+        "evidence": len(security_engine.evidence_engine.records),
+        "investigations": len(security_engine.investigations),
+        "verifications": len(security_verifications),
+        "correlations": len(security_engine.correlations),
+        "limitations": ["Central intelligence event, evidence, investigation, and verification records are lost when the service restarts."],
+    }
+
+
+@app.get("/api/system/modules")
+def get_system_modules():
+    return {
+        "modules": [
+            {"name": "NetworkShield", "status": "Available", "detail": "Synthetic network detection is available; no live telemetry integration is configured."},
+            {"name": "AgentShield", "status": "Available", "detail": "Agent-network controls are available but not yet wired into the central event API."},
+            {"name": "MemoryShield", "status": "Not integrated", "detail": "No central event adapter is configured."},
+            {"name": "DepGuardX", "status": "Not integrated", "detail": "No central event adapter is configured."},
+            {"name": "PulseGuardX", "status": "Not integrated", "detail": "No central event adapter is configured."},
+            {"name": "CryptoShield", "status": "Not integrated", "detail": "No central event adapter is configured."},
+            {"name": "SOCrates", "status": "Integrated", "detail": "Deterministic local fallback remains available; fixture output is labelled synthetic."},
+            {"name": "Central Intelligence Engine", "status": "Integrated", "detail": "In-memory session storage; restart does not preserve records."},
+        ]
+    }

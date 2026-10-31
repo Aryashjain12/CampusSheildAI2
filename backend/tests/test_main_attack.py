@@ -31,11 +31,24 @@ def test_main_attack_story_runs_end_to_end(tmp_path):
 
     # 3. Sample Event file written and valid
     assert sample_file.exists()
+    assert result["sample_event_file"] == str(sample_file)
     events_data = json.loads(sample_file.read_text(encoding="utf-8"))
-    assert len(events_data) > 0
+    assert len(events_data) == result["events_count"]
+    assert result["events"] == events_data
     first_evt = events_data[0]
     for required_key in ["id", "source", "time", "entity", "event_type", "evidence", "severity", "confidence", "related_entities"]:
         assert required_key in first_evt
+
+
+def test_main_attack_story_without_output_does_not_modify_shared_fixture():
+    fixture_path = Path(__file__).resolve().parents[1] / "data" / "sample_events.json"
+    fixture_before = fixture_path.read_bytes()
+
+    result = run_main_attack_story()
+
+    assert result["sample_event_file"] is None
+    assert len(result["events"]) == result["events_count"]
+    assert fixture_path.read_bytes() == fixture_before
 
 
 def test_agent_evidence_tools_for_controller():

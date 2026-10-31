@@ -10,7 +10,7 @@ Scenario:
    - Calls fake_export_tool (decoy tool trap & permission denial).
    - Finance becomes Exposed.
 5. Library agent executes normal catalogue search and stays clean.
-6. Emits events in Common Event format and writes sample event file for Member A and C.
+6. Emits events in Common Event format. Callers may optionally persist them to a file.
 """
 from __future__ import annotations
 import json
@@ -169,11 +169,11 @@ def run_main_attack_story(output_file: Path | str | None = None) -> dict:
     # Simulate confirmed exfiltration via canary trigger
     canary_tracker.record_exfiltration("finance", "STU-2026-007", destination=f"ip:{attacker_ip}")
 
-    # Output Sample Event File for Member A & Member C
-    sample_path = Path(output_file) if output_file else Path(__file__).resolve().parents[2] / "data" / "sample_events.json"
-    sample_path.parent.mkdir(parents=True, exist_ok=True)
     events_dump = [e.model_dump() for e in events]
-    sample_path.write_text(json.dumps(events_dump, indent=2), encoding="utf-8")
+    sample_path: Path | None = Path(output_file) if output_file is not None else None
+    if sample_path is not None:
+        sample_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_path.write_text(json.dumps(events_dump, indent=2), encoding="utf-8")
 
     summary = {
         "scenario": "Main Attack Story",
@@ -188,16 +188,18 @@ def run_main_attack_story(output_file: Path | str | None = None) -> dict:
         "records_exposed": exposed_records,
         "records_exfiltrated": ["STU-2026-007"],
         "events_count": len(events),
+        "events": events_dump,
         "canary_access_count": len(canary_accesses),
         "decoys_triggered": decoy_engine.get_triggered(),
-        "sample_event_file": str(sample_path)
+        "sample_event_file": str(sample_path) if sample_path is not None else None,
     }
 
     return summary
 
 
 if __name__ == "__main__":
-    result = run_main_attack_story()
+    generated_events_path = Path(__file__).resolve().parents[2] / "data" / "generated_main_attack_events.json"
+    result = run_main_attack_story(output_file=generated_events_path)
     print("=" * 60)
     print("CAMPUSSHIELD AI 2.0 - MAIN ATTACK RUN SUMMARY")
     print("=" * 60)

@@ -84,6 +84,9 @@ class EventCategory(str, Enum):
     SYSTEM = "system"
 
 
+_SupportedCategories = frozenset(c.value for c in EventCategory)
+
+
 class SecurityEvent(BaseModel):
     """
     Common event format used by all CampusShield modules.
@@ -102,7 +105,7 @@ class SecurityEvent(BaseModel):
 
     category: EventCategory
 
-    source: str = Field(min_length=1, max_length=255)
+    source: str = Field(min_length=3, max_length=255)
 
     target: str | None = Field(default=None, max_length=255)
 
@@ -116,6 +119,16 @@ class SecurityEvent(BaseModel):
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("category")
+    @classmethod
+    def _require_known_category(cls, value: EventCategory) -> EventCategory:
+        if value.value not in _SupportedCategories:
+            raise ValueError(
+                f"Unsupported event category: {value.value!r}. "
+                f"Supported categories: {sorted(_SupportedCategories)}."
+            )
+        return value
+
     @field_validator("timestamp")
     @classmethod
     def timestamp_must_be_timezone_aware(cls, value: datetime) -> datetime:
@@ -125,3 +138,75 @@ class SecurityEvent(BaseModel):
             raise ValueError("Timestamp must include timezone information")
 
         return value
+
+
+class EvidenceProvenance(str, Enum):
+    """How an evidence record entered the central intelligence engine."""
+
+    ACTUAL_COLLECTED = "actual_collected"
+    USER_SUPPLIED = "user_supplied"
+    SYNTHETIC_FIXTURE = "synthetic_fixture"
+    INFERRED = "inferred"
+
+
+class ResponseState(str, Enum):
+    """Explicit lifecycle of a recommended or performed response."""
+
+    DETECTED = "detected"
+    INVESTIGATED = "investigated"
+    RESPONSE_RECOMMENDED = "response_recommended"
+    RESPONSE_ATTEMPTED = "response_attempted"
+    RESPONSE_SIMULATED = "response_simulated"
+    RESPONSE_EXECUTED = "response_executed"
+    RESPONSE_VERIFIED = "response_verified"
+
+
+class InvestigationStep(BaseModel):
+    label: str
+    detail: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class NormalizedInvestigationResult(BaseModel):
+    """Stable result boundary between SOCrates and the central engine.
+
+    ``raw_verdict`` retains SOCrates-specific outcomes, while ``verdict`` is
+    restricted to the public CampusShield contract.
+    """
+
+    investigation_id: UUID = Field(default_factory=uuid4)
+    event_id: UUID
+    status: str
+    verdict: Verdict
+    raw_verdict: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str
+    steps: list[InvestigationStep] = Field(default_factory=list)
+    evidence_references: list[UUID] = Field(default_factory=list)
+    synthetic_evidence: dict[str, Any] = Field(default_factory=dict)
+    evidence_limitations: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    response_state: ResponseState = ResponseState.INVESTIGATED
+    response_reference: str | None = None
+    previous_verdict: str | None = None
+    investigated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class EvidenceSubmission(BaseModel):
+    """Validated evidence payload accepted from an API integration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1, max_length=2_000)
+    details: dict[str, Any] = Field(default_factory=dict)
+    source: str | None = Field(default=None, min_length=1, max_length=255)
+    provenance: EvidenceProvenance = EvidenceProvenance.USER_SUPPLIED
+
+
+class EventCorrelation(BaseModel):
+    correlation_id: UUID = Field(default_factory=uuid4)
+    event_ids: list[UUID] = Field(min_length=2, max_length=2)
+    shared_entities: list[str] = Field(min_length=1)
+    time_delta_seconds: float = Field(ge=0)
+    reason: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

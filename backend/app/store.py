@@ -1,6 +1,6 @@
 from app.models import Incident
 
-INCIDENTS: dict[str, Incident] = {}
+INCIDENTS: dict[str, object] = {}
 AUDIT: list[dict] = []
 SIMULATED_QUARANTINE: set[str] = set()
 INVESTIGATIONS: dict[str, object] = {}
